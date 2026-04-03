@@ -27,6 +27,25 @@
     --radius: 18px;
   }
 
+  /* RESTRIÇÃO PARA PC */
+  #pc-warning {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 9999;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 20px;
+  }
+
+  @media (min-width: 1025px) {
+    #pc-warning { display: flex; }
+    body > *:not(#pc-warning) { display: none; }
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
@@ -204,6 +223,27 @@
     transition: width 0.4s;
   }
 
+  /* MODAL DE PREMIAÇÃO */
+  #reward-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(5px);
+  }
+  .reward-content {
+    background: white;
+    padding: 30px;
+    border-radius: 30px;
+    text-align: center;
+    max-width: 300px;
+    animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  @keyframes popIn { from { transform: scale(0.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
   .legend {
     display: flex;
     gap: 14px;
@@ -231,6 +271,12 @@
 </head>
 <body>
 
+<div id="pc-warning">
+  <h1 style="font-family: 'Fredoka One'; color: var(--primary);">📱 Acesso Mobile</h1>
+  <p style="margin-top: 15px;">Este jogo foi otimizado para celulares e tablets.</p>
+  <p>Por favor, abra em um dispositivo móvel.</p>
+</div>
+
 <header>
   <h1>🔢 Sudoku Educacional</h1>
   <p>Desenvolva lógica, foco e raciocínio!</p>
@@ -252,7 +298,7 @@
 <div class="info-bar">
   <span>⏱ Tempo: <span class="val" id="timer">00:00</span></span>
   <span>❌ Erros: <span class="val" id="errcount">0</span></span>
-  <span>💡 Dicas: <span class="val" id="hintcount">3</span></span>
+  <span>⭐ Pontos: <span class="val" id="scorecount">0</span></span>
 </div>
 
 <div class="progress-bar-wrap">
@@ -266,14 +312,49 @@
   </div>
   <div class="numpad" id="numpad"></div>
   <div class="legend">
-    <span><span class="legend-dot" style="background:#f0e6d3;border:1px solid #b0956e"></span>Fixo</span>
-    <span><span class="legend-dot" style="background:#e8f8f3;border:1px solid #ccc"></span>Destaque</span>
-    <span><span class="legend-dot" style="background:#fde8ed;border:1px solid #ccc"></span>Erro</span>
-    <span><span class="legend-dot" style="background:#fff3cc;border:1px solid #ccc"></span>Selecionado</span>
+    <span>Nível: <strong id="level-label" style="color:var(--primary)">Fácil</strong></span>
+    <span>💡 Dicas: <span id="hintcount">3</span></span>
+  </div>
+</div>
+
+<!-- Modal de Premiação -->
+<div id="reward-modal">
+  <div class="reward-content">
+    <h1 style="font-family: 'Fredoka One'; color: var(--accent); font-size: 2.5rem;">🏆</h1>
+    <h2 style="font-family: 'Fredoka One'; color: var(--text);">Incrível!</h2>
+    <p style="margin: 15px 0;">Você completou o nível <span id="reward-level"></span>!</p>
+    <p>Pontuação Final: <strong id="reward-score" style="color: var(--accent2);"></strong></p>
+    <button class="btn btn-new" style="margin-top: 20px; width: 100%;" onclick="closeReward()">Jogar Novamente</button>
   </div>
 </div>
 
 <script>
+// ---- Áudio ----
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playTone(freq, type, duration) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+const sounds = {
+  click: () => playTone(600, 'sine', 0.1),
+  error: () => playTone(150, 'sawtooth', 0.3),
+  hint: () => playTone(800, 'sine', 0.2),
+  win: () => {
+    playTone(523.25, 'sine', 0.2);
+    setTimeout(() => playTone(659.25, 'sine', 0.2), 150);
+    setTimeout(() => playTone(783.99, 'sine', 0.4), 300);
+  }
+};
+
 // ---- Puzzles ----
 const puzzles = {
   facil: [
@@ -360,14 +441,16 @@ const puzzles = {
 let level = 'facil';
 let puzzle = [], solution = [], userGrid = [];
 let selected = null;
-let errors = 0, hints = 3;
+let errors = 0, hints = 3, score = 0;
 let timerSec = 0, timerInterval = null;
 let gameWon = false;
 
 function setLevel(l) {
+  sounds.click();
   level = l;
   document.querySelectorAll('.btn-level').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
+  document.getElementById('level-label').textContent = l.charAt(0).toUpperCase() + l.slice(1);
   newGame();
 }
 
@@ -379,9 +462,11 @@ function newGame() {
   selected = null;
   errors = 0;
   hints = 3;
+  score = 0;
   gameWon = false;
   document.getElementById('errcount').textContent = 0;
   document.getElementById('hintcount').textContent = 3;
+  document.getElementById('scorecount').textContent = 0;
   document.getElementById('message').textContent = '';
   document.getElementById('message').className = 'message';
   clearInterval(timerInterval);
@@ -428,6 +513,7 @@ function getCellEl(r, c) {
 
 function selectCell(r, c) {
   if (puzzle[r][c] !== 0 || gameWon) return;
+  sounds.click();
   selected = [r, c];
   highlightCells();
 }
@@ -465,11 +551,16 @@ function inputNum(n) {
   renderBoard();
   updateProgress();
   if (n !== 0 && n !== solution[r][c]) {
+    sounds.error();
     errors++;
+    score = Math.max(0, score - 5);
     document.getElementById('errcount').textContent = errors;
+    document.getElementById('scorecount').textContent = score;
     showMessage('❌ Número incorreto! Tente novamente.', 'error-msg');
-    if (errors >= 5) showMessage('⚠️ Muitos erros! Use as dicas!', 'error-msg');
   } else if (n !== 0) {
+    sounds.click();
+    score += 10;
+    document.getElementById('scorecount').textContent = score;
     showMessage('✓ Correto!', 'success-msg', 800);
     checkWin();
   }
@@ -477,6 +568,7 @@ function inputNum(n) {
 
 function eraseCell() {
   if (!selected || gameWon) return;
+  sounds.click();
   const [r, c] = selected;
   if (puzzle[r][c] !== 0) return;
   userGrid[r][c] = 0;
@@ -485,8 +577,8 @@ function eraseCell() {
 }
 
 function giveHint() {
-  if (hints <= 0) { showMessage('Sem mais dicas!', 'error-msg'); return; }
-  // Find an empty or wrong cell
+  if (hints <= 0) { sounds.error(); showMessage('Sem mais dicas!', 'error-msg'); return; }
+  sounds.hint();
   let candidates = [];
   for (let r = 0; r < 9; r++)
     for (let c = 0; c < 9; c++)
@@ -500,22 +592,24 @@ function giveHint() {
   selected = [r, c];
   renderBoard();
   updateProgress();
-  showMessage(`💡 Dica aplicada na linha ${r+1}, coluna ${c+1}!`, 'success-msg');
+  showMessage(`💡 Dica aplicada!`, 'success-msg');
   checkWin();
 }
 
 function checkBoard() {
+  sounds.click();
   let wrongCount = 0;
   for (let r = 0; r < 9; r++)
     for (let c = 0; c < 9; c++)
       if (!puzzle[r][c] && userGrid[r][c] && userGrid[r][c] !== solution[r][c])
         wrongCount++;
   if (wrongCount === 0) showMessage('✅ Sem erros encontrados!', 'success-msg');
-  else showMessage(`❌ ${wrongCount} célula(s) com erros.`, 'error-msg');
+  else { sounds.error(); showMessage(`❌ ${wrongCount} célula(s) com erros.`, 'error-msg'); }
   renderBoard();
 }
 
 function resetBoard() {
+  sounds.click();
   userGrid = puzzle.map(r => [...r]);
   selected = null;
   renderBoard();
@@ -527,12 +621,20 @@ function checkWin() {
   for (let r = 0; r < 9; r++)
     for (let c = 0; c < 9; c++)
       if (userGrid[r][c] !== solution[r][c]) return;
+  
   gameWon = true;
+  sounds.win();
   clearInterval(timerInterval);
-  const m = String(Math.floor(timerSec/60)).padStart(2,'0');
-  const s = String(timerSec%60).padStart(2,'0');
-  showMessage(`🎉 Parabéns! Concluído em ${m}:${s}!`, 'success-msg');
-  updateProgress();
+  
+  // Exibir Premiação
+  document.getElementById('reward-level').textContent = level;
+  document.getElementById('reward-score').textContent = score + " pts";
+  document.getElementById('reward-modal').style.display = 'flex';
+}
+
+function closeReward() {
+  document.getElementById('reward-modal').style.display = 'none';
+  newGame();
 }
 
 function updateProgress() {
